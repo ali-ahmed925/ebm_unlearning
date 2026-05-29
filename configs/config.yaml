@@ -1,0 +1,56 @@
+seed: 42
+device: cuda
+
+data:
+  dataset: cifar10  # mnist | cifar10
+  data_dir: ./data
+  batch_size: 128
+  num_workers: 2
+  forget:
+    mode: class
+    class_label: 0
+  retain:
+    mode: complement
+
+model:
+  name: energy_model
+  backbone: resnet18   # conv | resnet18
+  imagenet_pretrained: true
+  finetune_stages: 1   # 1 => layer4 only
+  in_channels: 3
+  hidden_dim: 64
+  num_classes: 10
+  embed_dim: 128
+
+pretrain:
+  epochs: 50
+  lr: 1.0e-3
+  weight_decay: 0.0
+  margin: 1.0
+  k_neg: 10
+  neg_chunk: 5
+  val_fraction: 0.1
+  early_stopping:
+    enabled: true
+    patience: 5
+    min_delta: 0.001
+    mode: max
+  log_every: 100
+  checkpoint_path: outputs/checkpoints/ebm_pretrained.pt
+
+unlearning:
+  steps: 1500
+  lr: 1.0e-4
+  weight_decay: 0.0
+  lambda_f: 1.0
+  lambda_r: 10.0
+  lambda_m: 1.0
+  lambda_e: 1.0e-3
+  margin: 5.0
+  log_every: 50
+  checkpoint_path: outputs/checkpoints/ebm_unlearned.pt
+
+evaluation:
+  holdout_fraction: 0.2
+
+
