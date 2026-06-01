@@ -89,14 +89,16 @@ class EnergyModel(nn.Module):
                 for p in m.parameters():
                     p.requires_grad_(True)
 
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        """Return image feature vector f(x) without the label interaction."""
+        if self._backbone is None:
+            return self.encoder(x)
+        return self.proj(self._backbone(x))
+
     def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         if y.dtype != torch.long:
             y = y.to(torch.long)
-        if self._backbone is None:
-            f = self.encoder(x)
-        else:
-            feats = self._backbone(x)
-            f = self.proj(feats)
+        f = self.encode(x)
         e = self.label_emb(y)
         z = f * e
         out = self.energy(z)

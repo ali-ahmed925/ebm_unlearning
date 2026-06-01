@@ -22,12 +22,14 @@ class UnlearnConfig:
     lambda_r: float = 10.0
     lambda_m: float = 1.0
     lambda_e: float = 1.0e-3
+    lambda_clip: float = 0.0      # CLIP subspace generalization loss weight
+    n_pca_components: int = 10    # number of PCA directions for forget subspace
     margin: float = 5.0
     log_every: int = 50
     checkpoint_path: str = "outputs/checkpoints/ebm_unlearned.pt"
 
 
-def _cycle(loader: DataLoader) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
+def _cycle(loader: DataLoader) -> Iterator:
     while True:
         for batch in loader:
             yield batch
@@ -38,6 +40,11 @@ def _freeze(model: nn.Module) -> None:
     model.eval()
     for p in model.parameters():
         p.requires_grad_(False)
+
+
+def _sample_neg(y: torch.Tensor, num_classes: int, g: torch.Generator, device: torch.device) -> torch.Tensor:
+    r = torch.randint(0, num_classes - 1, size=y.shape, generator=g, device="cpu", dtype=torch.long).to(device)
+    return r + (r >= y).to(torch.long)
 
 
 def unlearn(
@@ -54,9 +61,10 @@ def unlearn(
     forget_holdout_loader: DataLoader | None = None,
     retain_holdout_loader: DataLoader | None = None,
 ) -> nn.Module:
+    import copy
     model = model.to(device)
     model.train()
-    pretrained = pretrained.to(device)
+    pretrained = copy.deepcopy(pretrained).to(device)
     _freeze(pretrained)
 
     opt = torch.optim.Adam(model.parameters(), lr=float(cfg.lr), weight_decay=float(cfg.weight_decay))
@@ -67,9 +75,10 @@ def unlearn(
         lambda_e=float(cfg.lambda_e),
     )
 
-    f_iter = _cycle(forget_loader)
-    r_iter = _cycle(retain_loader)
-    g = torch.Generator(device="cpu").manual_seed(int(seed))
+    use_clip = float(cfg.lambda_clip) > 0
+    f_iter   = _cycle(forget_loader)
+    r_iter   = _cycle(retain_loader)
+    g        = torch.Generator(device="cpu").manual_seed(int(seed))
     f_ho_iter = _cycle(forget_holdout_loader) if forget_holdout_loader is not None else None
     r_ho_iter = _cycle(retain_holdout_loader) if retain_holdout_loader is not None else None
 
@@ -79,88 +88,88 @@ def unlearn(
         return float(roc_auc_score(y, x))
 
     for step in range(int(cfg.steps)):
+        # ── Fetch batches ────────────────────────────────────────────────────
         xf, yf = next(f_iter)
-        xr, yr = next(r_iter)
-        xf = xf.to(device)
-        yf = yf.to(device).to(torch.long)
-        xr = xr.to(device)
-        yr = yr.to(device).to(torch.long)
+        retain_batch = next(r_iter)
+
+        # Retain loader returns (x, y) normally or (x, y, w) when weighted
+        if len(retain_batch) == 3:
+            xr, yr, wr = retain_batch
+            wr = wr.float().to(device)   # (B,) CLIP subspace weights
+        else:
+            xr, yr = retain_batch
+            wr = None
+
+        xf = xf.to(device);  yf = yf.to(device).to(torch.long)
+        xr = xr.to(device);  yr = yr.to(device).to(torch.long)
 
         if not hasattr(model, "label_emb"):
             raise ValueError("Expected a label-conditioned EnergyModel with `label_emb`.")
         num_classes = int(model.label_emb.num_embeddings)
-        if num_classes < 2:
-            raise ValueError("num_classes must be >= 2")
-        # sample y_neg != y_f
-        y_neg_f = torch.randint(0, num_classes - 1, size=yf.shape, generator=g, device="cpu", dtype=torch.long).to(device)
-        y_neg_f = y_neg_f + (y_neg_f >= yf).to(torch.long)
 
+        y_neg_f = _sample_neg(yf, num_classes, g, device)
+
+        # ── Standard unlearning losses ───────────────────────────────────────
         total, parts = total_unlearning_loss(
-            model,
-            pretrained,
-            xf,
-            yf,
-            y_neg_f,
-            xr,
-            yr,
-            margin=float(cfg.margin),
-            weights=weights,
+            model, pretrained, xf, yf, y_neg_f, xr, yr,
+            margin=float(cfg.margin), weights=weights,
         )
+
+        # ── CLIP subspace generalization loss ────────────────────────────────
+        # For retain samples with high projection onto the forget subspace,
+        # apply a weighted forget signal. This generalizes forgetting to
+        # semantically similar classes without explicit supervision.
+        if use_clip and wr is not None and wr.sum() > 0:
+            y_neg_r = _sample_neg(yr, num_classes, g, device)
+            e_pos = model(xr, yr)
+            e_neg = model(xr, y_neg_r)
+            per_sample = torch.relu(float(cfg.margin) + e_neg - e_pos)  # (B,)
+            l_clip = (wr * per_sample).mean()
+            total  = total + float(cfg.lambda_clip) * l_clip
+            parts["clip"] = l_clip.detach()
 
         opt.zero_grad(set_to_none=True)
         total.backward()
         opt.step()
 
+        # ── Logging / tracking ───────────────────────────────────────────────
         if tracker is not None:
             tracker.log_scalar("unlearn/total", float(total.item()), step)
-            tracker.log_scalars(
-                "unlearn/loss",
-                {k: float(v.item()) for k, v in parts.items()},
-                step,
-            )
+            tracker.log_scalars("unlearn/loss", {k: float(v.item()) for k, v in parts.items()}, step)
             with torch.no_grad():
-                ef = model(xf, yf)
-                er = model(xr, yr)
-                ef0 = pretrained(xf, yf)
-                er0 = pretrained(xr, yr)
+                ef   = model(xf, yf);     er   = model(xr, yr)
+                ef0  = pretrained(xf, yf); er0  = pretrained(xr, yr)
                 gap_fw = (ef - model(xf, y_neg_f)).mean()
-                tracker.log_scalar("unlearn/energy_forget_mean", float(ef.mean().item()), step)
-                tracker.log_scalar("unlearn/energy_retain_mean", float(er.mean().item()), step)
-                tracker.log_scalar("unlearn/energy_gap_forget_minus_retain", float((ef.mean() - er.mean()).item()), step)
-                tracker.log_scalar("unlearn/forgetting_score_batch", float((ef.mean() - ef0.mean()).item()), step)
-                tracker.log_scalar("unlearn/retention_score_batch", float(((er - er0) ** 2).mean().item()), step)
-                tracker.log_scalar("unlearn/forget_gap_correct_minus_wrong", float(gap_fw.item()), step)
-                tracker.log_scalar("unlearn/margin_effective", float(cfg.margin), step)
+                tracker.log_scalar("unlearn/energy_forget_mean",            float(ef.mean()), step)
+                tracker.log_scalar("unlearn/energy_retain_mean",            float(er.mean()), step)
+                tracker.log_scalar("unlearn/energy_gap_forget_minus_retain", float((ef.mean() - er.mean())), step)
+                tracker.log_scalar("unlearn/forgetting_score_batch",        float((ef.mean() - ef0.mean())), step)
+                tracker.log_scalar("unlearn/retention_score_batch",         float(((er - er0) ** 2).mean()), step)
+                tracker.log_scalar("unlearn/forget_gap_correct_minus_wrong", float(gap_fw), step)
+                if wr is not None:
+                    tracker.log_scalar("unlearn/clip_weight_mean_batch", float(wr.mean()), step)
 
                 if f_ho_iter is not None:
                     xf_ho, yf_ho = next(f_ho_iter)
-                    xf_ho = xf_ho.to(device)
-                    yf_ho = yf_ho.to(device).to(torch.long)
-                    e_f_tr = model(xf, yf).detach()
-                    e_f_ho = model(xf_ho, yf_ho).detach()
-                    tracker.log_scalar("unlearn/mia_proxy_forget_auc_batch", _mia_auc(e_f_tr, e_f_ho), step)
-
+                    xf_ho = xf_ho.to(device); yf_ho = yf_ho.to(device).to(torch.long)
+                    tracker.log_scalar("unlearn/mia_proxy_forget_auc_batch",
+                                       _mia_auc(model(xf, yf).detach(), model(xf_ho, yf_ho).detach()), step)
                 if r_ho_iter is not None:
                     xr_ho, yr_ho = next(r_ho_iter)
-                    xr_ho = xr_ho.to(device)
-                    yr_ho = yr_ho.to(device).to(torch.long)
-                    e_r_tr = model(xr, yr).detach()
-                    e_r_ho = model(xr_ho, yr_ho).detach()
-                    tracker.log_scalar("unlearn/mia_proxy_retain_auc_batch", _mia_auc(e_r_tr, e_r_ho), step)
+                    xr_ho = xr_ho.to(device); yr_ho = yr_ho.to(device).to(torch.long)
+                    tracker.log_scalar("unlearn/mia_proxy_retain_auc_batch",
+                                       _mia_auc(model(xr, yr).detach(), model(xr_ho, yr_ho).detach()), step)
 
         if step % int(cfg.log_every) == 0:
             with torch.no_grad():
                 gap_fw = (model(xf, yf) - model(xf, y_neg_f)).mean()
+            clip_str = f" clip={parts['clip'].item():.6f}" if "clip" in parts else ""
             logger.info(
-                "[unlearn] step=%d margin=%.4f gap_fw=%.4f total=%.6f forget=%.6f retain=%.6f margin_loss=%.6f energy_reg=%.6f",
-                step,
-                float(cfg.margin),
-                float(gap_fw.item()),
-                float(total.item()),
-                float(parts["forget"].item()),
-                float(parts["retain"].item()),
-                float(parts["margin"].item()),
-                float(parts["energy_reg"].item()),
+                "[unlearn] step=%d gap_fw=%.4f total=%.6f forget=%.6f retain=%.6f margin=%.6f energy_reg=%.6f%s",
+                step, float(gap_fw), float(total),
+                float(parts["forget"]), float(parts["retain"]),
+                float(parts["margin"]), float(parts["energy_reg"]),
+                clip_str,
             )
 
     if cfg.checkpoint_path:
@@ -169,5 +178,3 @@ def unlearn(
         logger.info(f"[unlearn] saved checkpoint to {cfg.checkpoint_path}")
 
     return model
-
-

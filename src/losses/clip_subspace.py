@@ -1,0 +1,169 @@
+from __future__ import annotations
+
+import torch
+import torch.nn.functional as F
+from PIL import Image
+from torchvision import transforms
+from torch.utils.data import Dataset
+
+
+# ── Encoder loaders ───────────────────────────────────────────────────────────
+
+def load_clip_encoder(device):
+    """Load frozen CLIP ViT-B/32 encoder and its preprocessor."""
+    import open_clip
+    model, _, preprocess = open_clip.create_model_and_transforms("ViT-B-32", pretrained="openai")
+    model = model.to(device).eval()
+    for p in model.parameters():
+        p.requires_grad_(False)
+    return model, preprocess, "clip"
+
+
+def load_dino_encoder(device, model_name="dinov2_vitb14"):
+    """Load frozen DINOv2 encoder with standard ImageNet preprocessing."""
+    model = torch.hub.load("facebookresearch/dinov2", model_name, verbose=False)
+    model = model.to(device).eval()
+    for p in model.parameters():
+        p.requires_grad_(False)
+    preprocess = transforms.Compose([
+        transforms.Resize(224, interpolation=transforms.InterpolationMode.BICUBIC),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+    ])
+    return model, preprocess, "dino"
+
+
+# ── Internal feature extraction ───────────────────────────────────────────────
+
+@torch.no_grad()
+def _extract_features(model, preprocess, raw_data, indices, device, encoder_type="clip", batch_size=256):
+    """Extract normalized features from raw numpy images at given dataset indices."""
+    features = []
+    idx_list = indices.tolist() if isinstance(indices, torch.Tensor) else list(indices)
+    for start in range(0, len(idx_list), batch_size):
+        batch_idx = idx_list[start : start + batch_size]
+        imgs = torch.stack([preprocess(Image.fromarray(raw_data[i])) for i in batch_idx]).to(device)
+        if encoder_type == "clip":
+            feats = model.encode_image(imgs).float()
+        else:  # dino
+            feats = model(imgs).float()
+        features.append(F.normalize(feats, dim=-1))
+    return torch.cat(features, dim=0)  # (N, D)
+
+
+def compute_clip_subspace_weights(
+    model,
+    preprocess,
+    raw_data,
+    forget_indices,
+    retain_indices,
+    device,
+    n_components: int = 10,
+    encoder_type: str = "clip",
+    **kwargs,
+):
+    """PCA subspace generalization weights using any frozen encoder."""
+    model.eval()
+    tag = encoder_type.upper()
+
+    print(f"  {tag}: extracting {len(forget_indices)} forget features...")
+    forget_feat = _extract_features(model, preprocess, raw_data, forget_indices, device, encoder_type)
+
+    print(f"  {tag}: extracting {len(retain_indices)} retain features...")
+    retain_feat = _extract_features(model, preprocess, raw_data, retain_indices, device, encoder_type)
+
+    global_mean = torch.cat([forget_feat, retain_feat], dim=0).mean(dim=0)
+
+    forget_centered = forget_feat - global_mean.unsqueeze(0)
+    _, _, Vt = torch.linalg.svd(forget_centered, full_matrices=False)
+    subspace = Vt[:n_components]  # (k, D)
+
+    retain_centered = retain_feat - global_mean.unsqueeze(0)
+    proj_energy  = (retain_centered @ subspace.T).pow(2).sum(dim=1)
+    total_energy = retain_centered.pow(2).sum(dim=1).clamp(min=1e-8)
+    weights      = (proj_energy / total_energy).clamp(min=0, max=1)
+
+    print(f"  weights — mean={weights.mean():.4f}  max={weights.max():.4f}"
+          f"  %>0.05: {(weights > 0.05).float().mean():.1%}")
+
+    return weights.cpu(), subspace.cpu(), global_mean.cpu()
+
+
+def compute_clip_raw_similarity_weights(
+    model,
+    preprocess,
+    raw_data,
+    forget_indices,
+    retain_indices,
+    device,
+    encoder_type: str = "clip",
+    **kwargs,
+):
+    """Centered cosine similarity weighting (no PCA)."""
+    model.eval()
+
+    forget_feat = _extract_features(model, preprocess, raw_data, forget_indices, device, encoder_type)
+    retain_feat = _extract_features(model, preprocess, raw_data, retain_indices, device, encoder_type)
+
+    global_mean = torch.cat([forget_feat, retain_feat], dim=0).mean(dim=0)
+    proto = F.normalize(forget_feat.mean(dim=0) - global_mean, dim=0)
+    retain_centered = F.normalize(retain_feat - global_mean.unsqueeze(0), dim=-1)
+    weights = (retain_centered @ proto).clamp(min=0)
+
+    print(f"  weights — mean={weights.mean():.4f}  max={weights.max():.4f}"
+          f"  %>0.05: {(weights > 0.05).float().mean():.1%}")
+
+    return weights.cpu(), None, global_mean.cpu()
+
+
+def compute_random_subspace_weights(
+    model,
+    preprocess,
+    raw_data,
+    forget_indices,
+    retain_indices,
+    device,
+    n_components: int = 10,
+    encoder_type: str = "clip",
+    seed: int = 0,
+    **kwargs,
+):
+    """Random orthogonal subspace — negative control."""
+    model.eval()
+
+    forget_feat = _extract_features(model, preprocess, raw_data, forget_indices, device, encoder_type)
+    retain_feat = _extract_features(model, preprocess, raw_data, retain_indices, device, encoder_type)
+
+    global_mean = torch.cat([forget_feat, retain_feat], dim=0).mean(dim=0)
+
+    D = forget_feat.shape[1]
+    torch.manual_seed(seed)
+    rand_mat  = torch.randn(D, n_components, device=device)
+    subspace, _ = torch.linalg.qr(rand_mat)
+    subspace  = subspace.T  # (k, D)
+
+    retain_centered = retain_feat - global_mean.unsqueeze(0)
+    proj_energy  = (retain_centered @ subspace.T).pow(2).sum(dim=1)
+    total_energy = retain_centered.pow(2).sum(dim=1).clamp(min=1e-8)
+    weights      = (proj_energy / total_energy).clamp(min=0, max=1)
+
+    print(f"  weights — mean={weights.mean():.4f}  max={weights.max():.4f}"
+          f"  %>0.05: {(weights > 0.05).float().mean():.1%}")
+
+    return weights.cpu(), subspace.cpu(), global_mean.cpu()
+
+
+class WeightedSubset(Dataset):
+    """Wraps an IndexedSubset to also return a pre-computed per-sample scalar weight."""
+
+    def __init__(self, subset: Dataset, weights: torch.Tensor):
+        self.subset  = subset
+        self.weights = weights  # (N,)
+
+    def __len__(self):
+        return len(self.subset)
+
+    def __getitem__(self, idx: int):
+        x, y = self.subset[idx]
+        return x, y, self.weights[idx].item()

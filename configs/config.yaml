@@ -2,13 +2,14 @@ seed: 42
 device: cuda
 
 data:
-  dataset: cifar10  # mnist | cifar10
+  dataset: cifar100  # mnist | cifar10 | cifar100
   data_dir: ./data
   batch_size: 128
   num_workers: 2
   forget:
-    mode: class
-    class_label: 0
+    mode: class           # class | superclass
+    class_label: 11        # cifar100: 8=bicycle (vehicles_1)
+    superclass_label: 14  # cifar100: 18=vehicles_1 (used when mode=superclass)
   retain:
     mode: complement
 
@@ -16,10 +17,10 @@ model:
   name: energy_model
   backbone: resnet18   # conv | resnet18
   imagenet_pretrained: true
-  finetune_stages: 1   # 1 => layer4 only
+  finetune_stages: 2   # 2 => layer3+layer4
   in_channels: 3
   hidden_dim: 64
-  num_classes: 10
+  num_classes: 100     # 10 for cifar10, 100 for cifar100
   embed_dim: 128
 
 pretrain:
@@ -32,23 +33,25 @@ pretrain:
   val_fraction: 0.1
   early_stopping:
     enabled: true
-    patience: 5
+    patience: 8
     min_delta: 0.001
     mode: max
   log_every: 100
-  checkpoint_path: outputs/checkpoints/ebm_pretrained.pt
+  checkpoint_path: outputs/checkpoints/ebm_pretrained_cifar100.pt
 
 unlearning:
-  steps: 1500
+  steps: 2000
   lr: 1.0e-4
   weight_decay: 0.0
   lambda_f: 1.0
   lambda_r: 10.0
   lambda_m: 1.0
   lambda_e: 1.0e-3
+  lambda_clip: 6
+  n_pca_components: 30
   margin: 5.0
   log_every: 50
-  checkpoint_path: outputs/checkpoints/ebm_unlearned.pt
+  checkpoint_path: outputs/checkpoints/ebm_unlearned_clip.pt
 
 evaluation:
   holdout_fraction: 0.2

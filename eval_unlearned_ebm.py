@@ -107,7 +107,7 @@ def main() -> int:
         description="Evaluate an UNLEARNED label-conditioned EBM by inverted energy preference (test split)."
     )
     p.add_argument("--checkpoint", type=str, required=True, help="Path to checkpoint (expects {'model': state_dict}).")
-    p.add_argument("--dataset", type=str, default="mnist", choices=["mnist", "cifar10"], help="Dataset to evaluate.")
+    p.add_argument("--dataset", type=str, default="mnist", choices=["mnist", "cifar10", "cifar100"], help="Dataset to evaluate.")
     p.add_argument("--data-dir", type=str, default="data", help="Dataset directory (relative to ebm_unlearning/).")
     p.add_argument("--batch-size", type=int, default=256)
     p.add_argument("--num-workers", type=int, default=2)
@@ -134,7 +134,9 @@ def main() -> int:
         help="Chunk size for wrong-label evaluation to reduce GPU memory (use smaller if you OOM).",
     )
     p.add_argument("--trim", type=float, default=0.1, help="Trim fraction for trimmed mean of gaps.")
+    p.add_argument("--seed", type=int, default=0, help="Seed for negative label sampling (ensures reproducible eval).")
     args = p.parse_args()
+    torch.manual_seed(int(args.seed))
 
     root = _project_root()
     sys.path.insert(0, str(root.parent))

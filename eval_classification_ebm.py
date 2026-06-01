@@ -15,7 +15,7 @@ def _project_root() -> Path:
 
 def main() -> int:
     p = argparse.ArgumentParser(description="Classification via argmin_y E(x,y) for a label-conditioned EBM.")
-    p.add_argument("--dataset", type=str, default="mnist", choices=["mnist", "cifar10"])
+    p.add_argument("--dataset", type=str, default="mnist", choices=["mnist", "cifar10", "cifar100"])
     p.add_argument("--data-dir", type=str, default="data")
     p.add_argument("--checkpoint", type=str, required=True)
     p.add_argument("--batch-size", type=int, default=256)
@@ -24,9 +24,11 @@ def main() -> int:
     p.add_argument("--forget-label", type=int, default=None, help="If set, report forget/retain accuracies too.")
 
     p.add_argument("--num-classes", type=int, default=10)
-    p.add_argument("--in-channels", type=int, default=1)
+    p.add_argument("--in-channels", type=int, default=3)
     p.add_argument("--hidden-dim", type=int, default=64)
     p.add_argument("--embed-dim", type=int, default=128)
+    p.add_argument("--backbone", type=str, default="conv", choices=["conv", "resnet18"])
+    p.add_argument("--finetune-stages", type=int, default=1)
     p.add_argument("--y-chunk", type=int, default=10, help="Chunk size for label sweep to control GPU memory.")
     args = p.parse_args()
 
@@ -64,6 +66,8 @@ def main() -> int:
         hidden_dim=int(args.hidden_dim),
         num_classes=int(args.num_classes),
         embed_dim=int(args.embed_dim),
+        backbone=str(args.backbone),
+        finetune_stages=int(args.finetune_stages),
     )
     model = load_pretrained(model, str(Path(args.checkpoint).expanduser()), device=device)
     model.eval()
