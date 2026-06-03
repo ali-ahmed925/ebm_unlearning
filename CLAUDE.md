@@ -18,11 +18,13 @@ Key dependencies: PyTorch 2.5.1, torchvision 0.20.1, TensorBoard 2.16.2. `protob
 
 **All hyperparameters** are centralized in `configs/config.yaml`. The primary workflow uses Jupyter notebooks in order:
 
-1. `notebooks/01_data_setup.ipynb` — Download and verify MNIST/CIFAR-10
+1. `notebooks/01_data_setup.ipynb` — Download and verify MNIST/CIFAR-10/CIFAR-100
 2. `notebooks/02_ebm_pretraining.ipynb` — Pretrain EBM on full dataset
 3. `notebooks/03_unlearning.ipynb` — Unlearn the forget class
 4. `notebooks/04_evaluation.ipynb` — Evaluate accuracy and energy gaps
 5. `notebooks/05_additional_experiments.ipynb` — Extended experiments
+6. `notebooks/06_domainnet_pretraining.ipynb` — Pretrain on DomainNet (10-class, multi-domain)
+7. `notebooks/07_domainnet_unlearning.ipynb` — Unlearn on DomainNet (cross-domain generalization)
 
 **TensorBoard** (logs written by notebooks):
 ```bash
@@ -31,9 +33,24 @@ tensorboard --logdir outputs/tensorboard
 
 **CLI evaluation scripts** (standalone, each takes `--checkpoint`, `--dataset`, `--forget-label`):
 ```bash
+# CIFAR-10
 python eval_pretrained_ebm.py --checkpoint outputs/checkpoints/ebm_pretrained.pt --dataset cifar10 --forget-label 0
 python eval_unlearned_ebm.py  --checkpoint outputs/checkpoints/ebm_unlearned.pt  --dataset cifar10 --forget-label 0
 python eval_classification_ebm.py --checkpoint outputs/checkpoints/ebm_unlearned.pt --dataset cifar10 --forget-label 0
+
+# CIFAR-100 (requires --num-classes 100 --backbone resnet18)
+python eval_classification_ebm.py --checkpoint outputs/checkpoints/ebm_pretrained_cifar100.pt \
+  --dataset cifar100 --num-classes 100 --backbone resnet18 --forget-label 11
+
+# DomainNet (10-class; tiger=0; add --domain sketch to filter by domain, --filter-class-name tiger to filter by class)
+python eval_classification_ebm.py --checkpoint outputs/checkpoints/ebm_pretrained_domainnet.pt \
+  --dataset domainnet --num-classes 10 --backbone resnet18 --forget-label 0
+```
+
+**Analysis tools:**
+```bash
+python check_similarity.py              # PCA subspace overlap between classes (uses CLIP ViT-B/32)
+python check_prediction_distribution.py # Prediction distribution across classes
 ```
 
 Checkpoints and logs are written to `outputs/`.
@@ -70,8 +87,9 @@ Total: `L = λ_f·L_forget + λ_r·L_retain + λ_m·L_margin + λ_e·L_energy`
 
 ### Data (`src/data/`)
 
-- **`dataset.py`**: Loads MNIST or CIFAR-10 with correct normalization. `IndexedSubset` preserves original dataset indices.
+- **`dataset.py`**: Loads MNIST, CIFAR-10, or CIFAR-100 with correct normalization. `IndexedSubset` preserves original dataset indices.
 - **`split.py`**: Splits by forget class into forget/retain sets, then each into train/holdout (default 80/20).
+- **`domainnet.py`**: 10-class DomainNet subset (`EXPERIMENT_CLASSES`; tiger = index 0). Supports 4 domains (real/sketch/clipart/painting). `domain_labels` tensor enables domain-aware splitting for cross-domain generalization experiments.
 
 ### Evaluation (`src/evaluation/`)
 

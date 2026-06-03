@@ -47,6 +47,13 @@ def _sample_neg(y: torch.Tensor, num_classes: int, g: torch.Generator, device: t
     return r + (r >= y).to(torch.long)
 
 
+def _all_negatives(y: torch.Tensor, num_classes: int, device: torch.device) -> torch.Tensor:
+    """Return all C-1 negative labels per sample: shape (B, C-1)."""
+    all_labels = torch.arange(num_classes, device=device).unsqueeze(0).expand(y.shape[0], -1)  # (B, C)
+    mask = all_labels != y.unsqueeze(1)                                                          # (B, C)
+    return all_labels[mask].view(y.shape[0], num_classes - 1)                                   # (B, C-1)
+
+
 def unlearn(
     model: nn.Module,
     pretrained: nn.Module,
@@ -107,7 +114,7 @@ def unlearn(
             raise ValueError("Expected a label-conditioned EnergyModel with `label_emb`.")
         num_classes = int(model.label_emb.num_embeddings)
 
-        y_neg_f = _sample_neg(yf, num_classes, g, device)
+        y_neg_f = _all_negatives(yf, num_classes, device)
 
         # ── Standard unlearning losses ───────────────────────────────────────
         total, parts = total_unlearning_loss(
@@ -139,7 +146,8 @@ def unlearn(
             with torch.no_grad():
                 ef   = model(xf, yf);     er   = model(xr, yr)
                 ef0  = pretrained(xf, yf); er0  = pretrained(xr, yr)
-                gap_fw = (ef - model(xf, y_neg_f)).mean()
+                y_neg_log = _sample_neg(yf, num_classes, g, device)
+                gap_fw = (ef - model(xf, y_neg_log)).mean()
                 tracker.log_scalar("unlearn/energy_forget_mean",            float(ef.mean()), step)
                 tracker.log_scalar("unlearn/energy_retain_mean",            float(er.mean()), step)
                 tracker.log_scalar("unlearn/energy_gap_forget_minus_retain", float((ef.mean() - er.mean())), step)
@@ -162,7 +170,8 @@ def unlearn(
 
         if step % int(cfg.log_every) == 0:
             with torch.no_grad():
-                gap_fw = (model(xf, yf) - model(xf, y_neg_f)).mean()
+                y_neg_log = _sample_neg(yf, num_classes, g, device)
+                gap_fw = (model(xf, yf) - model(xf, y_neg_log)).mean()
             clip_str = f" clip={parts['clip'].item():.6f}" if "clip" in parts else ""
             logger.info(
                 "[unlearn] step=%d gap_fw=%.4f total=%.6f forget=%.6f retain=%.6f margin=%.6f energy_reg=%.6f%s",

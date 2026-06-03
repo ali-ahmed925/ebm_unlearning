@@ -107,8 +107,10 @@ def main() -> int:
         description="Evaluate an UNLEARNED label-conditioned EBM by inverted energy preference (test split)."
     )
     p.add_argument("--checkpoint", type=str, required=True, help="Path to checkpoint (expects {'model': state_dict}).")
-    p.add_argument("--dataset", type=str, default="mnist", choices=["mnist", "cifar10", "cifar100"], help="Dataset to evaluate.")
+    p.add_argument("--dataset", type=str, default="mnist", choices=["mnist", "cifar10", "cifar100", "domainnet"], help="Dataset to evaluate.")
     p.add_argument("--data-dir", type=str, default="data", help="Dataset directory (relative to ebm_unlearning/).")
+    p.add_argument("--domain", type=str, default=None, help="DomainNet domain filter (real/sketch/clipart/painting).")
+    p.add_argument("--filter-class-name", type=str, default=None, help="DomainNet class name filter (e.g. tiger).")
     p.add_argument("--batch-size", type=int, default=256)
     p.add_argument("--num-workers", type=int, default=2)
     p.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"])
@@ -150,14 +152,23 @@ def main() -> int:
     else:
         device = torch.device(args.device)
 
-    dset = load_dataset(DatasetSpec(name=str(args.dataset), data_dir=str(root / args.data_dir), train=False, download=True))
-    if args.filter_label is not None:
-        targets = dset.targets
-        if not isinstance(targets, torch.Tensor):
-            targets = torch.tensor(targets)
-        mask = targets.to(torch.long) == int(args.filter_label)
-        idx = torch.nonzero(mask, as_tuple=False).squeeze(1).tolist()
-        dset = Subset(dset, idx)
+    if args.dataset == "domainnet":
+        from ebm_unlearning.src.data.domainnet import DomainNetSubset, EXPERIMENT_CLASSES
+        domains = [args.domain] if args.domain else ["real", "sketch", "clipart", "painting"]
+        dset = DomainNetSubset(root=str(root / args.data_dir), classes=EXPERIMENT_CLASSES, domains=domains)
+        filter_cls = dset.classes.index(args.filter_class_name) if args.filter_class_name else args.filter_label
+        if filter_cls is not None:
+            idx = torch.nonzero(dset.targets == int(filter_cls), as_tuple=False).squeeze(1).tolist()
+            dset = Subset(dset, idx)
+    else:
+        dset = load_dataset(DatasetSpec(name=str(args.dataset), data_dir=str(root / args.data_dir), train=False, download=True))
+        if args.filter_label is not None:
+            targets = dset.targets
+            if not isinstance(targets, torch.Tensor):
+                targets = torch.tensor(targets)
+            mask = targets.to(torch.long) == int(args.filter_label)
+            idx = torch.nonzero(mask, as_tuple=False).squeeze(1).tolist()
+            dset = Subset(dset, idx)
 
     loader = DataLoader(
         dset,

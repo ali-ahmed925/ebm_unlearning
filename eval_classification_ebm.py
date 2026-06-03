@@ -15,8 +15,10 @@ def _project_root() -> Path:
 
 def main() -> int:
     p = argparse.ArgumentParser(description="Classification via argmin_y E(x,y) for a label-conditioned EBM.")
-    p.add_argument("--dataset", type=str, default="mnist", choices=["mnist", "cifar10", "cifar100"])
+    p.add_argument("--dataset", type=str, default="mnist", choices=["mnist", "cifar10", "cifar100", "domainnet"])
     p.add_argument("--data-dir", type=str, default="data")
+    p.add_argument("--domain", type=str, default=None, help="DomainNet domain filter (real/sketch/clipart/painting).")
+    p.add_argument("--filter-class-name", type=str, default=None, help="DomainNet class name filter (e.g. tiger).")
     p.add_argument("--checkpoint", type=str, required=True)
     p.add_argument("--batch-size", type=int, default=256)
     p.add_argument("--num-workers", type=int, default=2)
@@ -45,14 +47,24 @@ def main() -> int:
     else:
         device = torch.device(args.device)
 
-    dset = load_dataset(
-        DatasetSpec(
-            name=str(args.dataset),
-            data_dir=str(root / args.data_dir),
-            train=False,
-            download=True,
+    if args.dataset == "domainnet":
+        from ebm_unlearning.src.data.domainnet import DomainNetSubset, EXPERIMENT_CLASSES
+        domains = [args.domain] if args.domain else ["real", "sketch", "clipart", "painting"]
+        dset = DomainNetSubset(root=str(root / args.data_dir), classes=EXPERIMENT_CLASSES, domains=domains)
+        filter_cls = dset.classes.index(args.filter_class_name) if args.filter_class_name else args.filter_label
+        if filter_cls is not None:
+            from torch.utils.data import Subset as _Sub
+            idx = torch.nonzero(dset.targets == int(filter_cls), as_tuple=False).squeeze(1).tolist()
+            dset = _Sub(dset, idx)
+    else:
+        dset = load_dataset(
+            DatasetSpec(
+                name=str(args.dataset),
+                data_dir=str(root / args.data_dir),
+                train=False,
+                download=True,
+            )
         )
-    )
     loader = DataLoader(
         dset,
         batch_size=int(args.batch_size),

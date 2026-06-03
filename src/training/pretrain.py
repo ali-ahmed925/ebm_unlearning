@@ -135,7 +135,7 @@ def pretrain_ebm(
                 device=device,
                 num_classes=int(model.label_emb.num_embeddings),
                 forget_label=None,
-                y_chunk=10,
+                y_chunk=5,
             )
             val_acc = float(res.overall_accuracy)
             if tracker is not None:

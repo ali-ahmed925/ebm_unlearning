@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 from torchvision import transforms
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 
 
 # ── Encoder loaders ───────────────────────────────────────────────────────────
@@ -38,7 +38,7 @@ def load_dino_encoder(device, model_name="dinov2_vitb14"):
 
 @torch.no_grad()
 def _extract_features(model, preprocess, raw_data, indices, device, encoder_type="clip", batch_size=256):
-    """Extract normalized features from raw numpy images at given dataset indices."""
+    """Extract normalized features from raw numpy images at given dataset indices (CIFAR-style)."""
     features = []
     idx_list = indices.tolist() if isinstance(indices, torch.Tensor) else list(indices)
     for start in range(0, len(idx_list), batch_size):
@@ -46,10 +46,65 @@ def _extract_features(model, preprocess, raw_data, indices, device, encoder_type
         imgs = torch.stack([preprocess(Image.fromarray(raw_data[i])) for i in batch_idx]).to(device)
         if encoder_type == "clip":
             feats = model.encode_image(imgs).float()
-        else:  # dino
+        else:
             feats = model(imgs).float()
         features.append(F.normalize(feats, dim=-1))
     return torch.cat(features, dim=0)  # (N, D)
+
+
+@torch.no_grad()
+def _extract_features_from_loader(model, loader, device, encoder_type="dino"):
+    """Extract normalized features from a DataLoader (DomainNet / file-based datasets)."""
+    features = []
+    for xb, _ in loader:
+        xb = xb.to(device)
+        if encoder_type == "clip":
+            feats = model.encode_image(xb).float()
+        else:
+            feats = model(xb).float()
+        features.append(F.normalize(feats, dim=-1))
+    return torch.cat(features, dim=0)  # (N, D)
+
+
+def compute_domainnet_subspace_weights(
+    model,
+    forget_loader: DataLoader,
+    retain_loader: DataLoader,
+    device,
+    n_components: int = 10,
+    encoder_type: str = "dino",
+):
+    """
+    Compute DINOv2 PCA subspace weights for DomainNet retain samples.
+
+    forget_loader: DataLoader over the forget domain-class (e.g. sketch-tiger)
+    retain_loader: DataLoader over all retain samples
+    Returns: weights (N_retain,), subspace (k, D), global_mean (D,)
+    """
+    model.eval()
+    tag = encoder_type.upper()
+
+    print(f"  {tag}: extracting forget features ({len(forget_loader.dataset)} samples)...")
+    forget_feat = _extract_features_from_loader(model, forget_loader, device, encoder_type)
+
+    print(f"  {tag}: extracting retain features ({len(retain_loader.dataset)} samples)...")
+    retain_feat = _extract_features_from_loader(model, retain_loader, device, encoder_type)
+
+    global_mean = torch.cat([forget_feat, retain_feat], dim=0).mean(dim=0)
+
+    forget_centered = forget_feat - global_mean.unsqueeze(0)
+    _, _, Vt = torch.linalg.svd(forget_centered, full_matrices=False)
+    subspace = Vt[:n_components]  # (k, D)
+
+    retain_centered = retain_feat - global_mean.unsqueeze(0)
+    proj_energy  = (retain_centered @ subspace.T).pow(2).sum(dim=1)
+    total_energy = retain_centered.pow(2).sum(dim=1).clamp(min=1e-8)
+    weights      = (proj_energy / total_energy).clamp(min=0, max=1)
+
+    print(f"  weights — mean={weights.mean():.4f}  max={weights.max():.4f}"
+          f"  %>0.05: {(weights > 0.05).float().mean():.1%}")
+
+    return weights.cpu(), subspace.cpu(), global_mean.cpu()
 
 
 def compute_clip_subspace_weights(
