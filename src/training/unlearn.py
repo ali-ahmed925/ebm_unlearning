@@ -23,6 +23,7 @@ class UnlearnConfig:
     lambda_m: float = 1.0
     lambda_e: float = 1.0e-3
     margin: float = 5.0
+    neg_k_forget: int = 0   # 0 = use all C-1 negatives; >0 = sample this many randomly
     log_every: int = 50
     checkpoint_path: str = "outputs/checkpoints/ebm_unlearned.pt"
 
@@ -91,9 +92,20 @@ def unlearn(
         num_classes = int(model.label_emb.num_embeddings)
         if num_classes < 2:
             raise ValueError("num_classes must be >= 2")
-        # sample y_neg != y_f
-        y_neg_f = torch.randint(0, num_classes - 1, size=yf.shape, generator=g, device="cpu", dtype=torch.long).to(device)
-        y_neg_f = y_neg_f + (y_neg_f >= yf).to(torch.long)
+        # build negatives for forget loss
+        k = int(cfg.neg_k_forget) if int(cfg.neg_k_forget) > 0 else (num_classes - 1)
+        if k >= num_classes - 1:
+            # all C-1 negatives: (B, C-1)
+            all_labels = torch.arange(num_classes, device=device).unsqueeze(0).expand(yf.shape[0], -1)
+            mask = all_labels != yf.unsqueeze(1)
+            y_neg_f = all_labels[mask].view(yf.shape[0], num_classes - 1)
+        else:
+            # sample k random negatives: (B, k)
+            rows = []
+            for _ in range(k):
+                r = torch.randint(0, num_classes - 1, size=yf.shape, generator=g, device="cpu", dtype=torch.long).to(device)
+                rows.append(r + (r >= yf).to(torch.long))
+            y_neg_f = torch.stack(rows, dim=1)   # (B, k)
 
         total, parts = total_unlearning_loss(
             model,
@@ -123,7 +135,9 @@ def unlearn(
                 er = model(xr, yr)
                 ef0 = pretrained(xf, yf)
                 er0 = pretrained(xr, yr)
-                gap_fw = (ef - model(xf, y_neg_f)).mean()
+                y_neg_log = torch.randint(0, num_classes - 1, size=yf.shape, generator=g, device="cpu", dtype=torch.long).to(device)
+                y_neg_log = y_neg_log + (y_neg_log >= yf).to(torch.long)
+                gap_fw = (ef - model(xf, y_neg_log)).mean()
                 tracker.log_scalar("unlearn/energy_forget_mean", float(ef.mean().item()), step)
                 tracker.log_scalar("unlearn/energy_retain_mean", float(er.mean().item()), step)
                 tracker.log_scalar("unlearn/energy_gap_forget_minus_retain", float((ef.mean() - er.mean()).item()), step)
@@ -150,7 +164,9 @@ def unlearn(
 
         if step % int(cfg.log_every) == 0:
             with torch.no_grad():
-                gap_fw = (model(xf, yf) - model(xf, y_neg_f)).mean()
+                y_neg_log = torch.randint(0, num_classes - 1, size=yf.shape, generator=g, device="cpu", dtype=torch.long).to(device)
+                y_neg_log = y_neg_log + (y_neg_log >= yf).to(torch.long)
+                gap_fw = (model(xf, yf) - model(xf, y_neg_log)).mean()
             logger.info(
                 "[unlearn] step=%d margin=%.4f gap_fw=%.4f total=%.6f forget=%.6f retain=%.6f margin_loss=%.6f energy_reg=%.6f",
                 step,

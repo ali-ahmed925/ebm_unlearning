@@ -2,24 +2,24 @@ seed: 42
 device: cuda
 
 data:
-  dataset: cifar10  # mnist | cifar10
+  dataset: cifar100
   data_dir: ./data
-  batch_size: 128
+  batch_size: 16
   num_workers: 2
   forget:
     mode: class
-    class_label: 2
+    class_label: 11    # rocket
   retain:
     mode: complement
 
 model:
   name: energy_model
-  backbone: resnet18   # conv | resnet18
+  backbone: resnet18
   imagenet_pretrained: true
-  finetune_stages: 1   # 1 => layer4 only
+  finetune_stages: 2     # layer3 + layer4
   in_channels: 3
   hidden_dim: 64
-  num_classes: 10
+  num_classes: 100
   embed_dim: 128
 
 pretrain:
@@ -32,26 +32,24 @@ pretrain:
   val_fraction: 0.1
   early_stopping:
     enabled: true
-    patience: 5
+    patience: 8
     min_delta: 0.001
     mode: max
   log_every: 100
-  checkpoint_path: outputs/checkpoints/ebm_pretrained.pt
+  checkpoint_path: outputs/checkpoints/ebm_pretrained_cifar100.pt
 
 unlearning:
-  steps: 800
+  steps: 700
   lr: 1.0e-4
   weight_decay: 0.0
   lambda_f: 1.0
-  lambda_r: 10
+  lambda_r: 30.0
   lambda_m: 1.0
   lambda_e: 1.0e-3
   margin: 5.0
-  neg_k_forget: 0    # 0 = all C-1 negatives (9 for cifar10)
+  neg_k_forget: 20   # 20 random negatives — enough coverage without 99x gradient pressure
   log_every: 50
-  checkpoint_path: outputs/checkpoints/ebm_unlearned.pt
+  checkpoint_path: outputs/checkpoints/cifar100_unlearned_placeholder.pt  # overridden at runtime
 
 evaluation:
   holdout_fraction: 0.2
-
-

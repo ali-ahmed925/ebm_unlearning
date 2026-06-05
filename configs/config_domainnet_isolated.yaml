@@ -1,0 +1,58 @@
+seed: 42
+device: cuda
+
+data:
+  dataset: domainnet
+  data_dir: ./data/domainnet/DomainNet
+  domains: [real, sketch, clipart, painting]
+  classes: [tiger, lion, bear, zebra, dog, horse, truck, car, guitar, airplane]
+  batch_size: 32
+  num_workers: 6
+  forget:
+    mode: class_domain
+    class_label: 7        # tiger — sorted classes: airplane,bear,car,dog,guitar,horse,lion,tiger,truck,zebra
+    class_name: tiger
+    domain: sketch        # change to: real | sketch | clipart | painting
+  retain:
+    mode: complement
+
+model:
+  name: energy_model
+  backbone: resnet18
+  imagenet_pretrained: true
+  finetune_stages: 2
+  in_channels: 3
+  hidden_dim: 64
+  num_classes: 10
+  embed_dim: 128
+
+pretrain:
+  epochs: 50
+  lr: 1.0e-4
+  weight_decay: 0.0
+  margin: 1.0
+  k_neg: 10
+  neg_chunk: 5
+  val_fraction: 0.1
+  early_stopping:
+    enabled: true
+    patience: 8
+    min_delta: 0.001
+    mode: max
+  log_every: 100
+  checkpoint_path: outputs/checkpoints/ebm_pretrained_domainnet.pt
+
+unlearning:
+  steps: 500
+  lr: 1.0e-4
+  weight_decay: 0.0
+  lambda_f: 1.0
+  lambda_r: 10.0
+  lambda_m: 1.0
+  lambda_e: 1.0e-3
+  margin: 5.0
+  log_every: 50
+  checkpoint_path: outputs/checkpoints/domainnet_isolated_unlearned_placeholder.pt  # overridden at runtime
+
+evaluation:
+  holdout_fraction: 0.2
