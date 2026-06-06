@@ -8,7 +8,7 @@ data:
   num_workers: 2
   forget:
     mode: class
-    class_label: 11    # rocket
+    class_label: 58    # rocket
   retain:
     mode: complement
 
