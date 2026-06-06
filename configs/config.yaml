@@ -8,8 +8,8 @@ data:
   num_workers: 2
   forget:
     mode: class           # class | superclass
-    class_label: 94        # cifar100: 8=bicycle (vehicles_1)
-    superclass_label: 6  # cifar100: 18=vehicles_1 (used when mode=superclass)
+    class_label: 8        # cifar100: 8=bicycle (vehicles_1)
+    superclass_label: 18  # cifar100: 18=vehicles_1 (used when mode=superclass)
   retain:
     mode: complement
 
