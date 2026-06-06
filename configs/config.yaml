@@ -8,8 +8,8 @@ data:
   num_workers: 2
   forget:
     mode: class           # class | superclass
-    class_label: 11        # cifar100: 8=bicycle (vehicles_1)
-    superclass_label: 14  # cifar100: 18=vehicles_1 (used when mode=superclass)
+    class_label: 94        # cifar100: 8=bicycle (vehicles_1)
+    superclass_label: 6  # cifar100: 18=vehicles_1 (used when mode=superclass)
   retain:
     mode: complement
 
@@ -47,7 +47,7 @@ unlearning:
   lambda_r: 10.0
   lambda_m: 1.0
   lambda_e: 1.0e-3
-  lambda_clip: 6
+  lambda_clip: 5
   n_pca_components: 30
   margin: 5.0
   log_every: 50
