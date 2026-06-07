@@ -4,13 +4,13 @@ device: cuda
 data:
   dataset: domainnet
   data_dir: ./data/domainnet/DomainNet
-  domains: [real, sketch, clipart, painting]
+  domains: [real, sketch, painting]
   classes: [tiger, lion, bear, zebra, dog, horse, truck, car, guitar, airplane]
   batch_size: 32
   num_workers: 6
   forget:
     mode: class_domain
-    class_label: 7        # tiger is index 7 in sorted(classes): airplane,bear,car,dog,guitar,horse,lion,tiger,truck,zebra
+    class_label: 0        # tiger is index 0 in classes list above
     class_name: tiger     # human-readable (not used by code)
     domain: sketch        # forget ONLY sketch-tiger
   retain:
