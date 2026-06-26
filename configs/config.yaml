@@ -8,7 +8,7 @@ data:
   num_workers: 2
   forget:
     mode: class
-    class_label: 2
+    class_label: 9
   retain:
     mode: complement
 
