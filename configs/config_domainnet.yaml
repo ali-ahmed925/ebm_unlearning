@@ -4,7 +4,7 @@ device: cuda
 data:
   dataset: domainnet
   data_dir: ./data/domainnet/DomainNet
-  domains: [real, sketch, painting]
+  domains: [real, sketch, clipart, painting]
   classes: [tiger, lion, bear, zebra, dog, horse, truck, car, guitar, airplane]
   batch_size: 32
   num_workers: 6
@@ -20,7 +20,7 @@ model:
   name: energy_model
   backbone: resnet18
   imagenet_pretrained: true
-  finetune_stages: 2
+  finetune_stages: 1
   in_channels: 3
   hidden_dim: 64
   num_classes: 10          # 10 classes (domain-agnostic labels)
@@ -47,11 +47,11 @@ unlearning:
   lr: 1.0e-4
   weight_decay: 0.0
   lambda_f: 1.0
-  lambda_r: 10.0
+  lambda_r: 15.0
   lambda_m: 1.0
   lambda_e: 1.0e-3
-  lambda_clip: 1.5
-  n_pca_components: 10
+  lambda_clip: 3.0
+  n_pca_components: 5
   margin: 5.0
   log_every: 50
   checkpoint_path: outputs/checkpoints/ebm_unlearned_domainnet_tiger_sketch.pt
