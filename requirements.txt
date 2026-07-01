@@ -1,17 +1,26 @@
-torch==2.5.1
-torchvision==0.20.1
-numpy==2.1.3
+# Pinned to the environment that produces the results (conda env: myn_again).
+# DINOv2 is fetched at runtime via torch.hub (facebookresearch/dinov2) — no pip package.
+
+# Core
+torch==2.8.0
+torchvision==0.23.0
+numpy==2.2.6
+scipy==1.16.2
+scikit-learn==1.8.0
+
+# Images / data
+Pillow==11.3.0
+
+# Config
 pyyaml==6.0.2
+
+# Encoders for DINOv2 / CLIP subspace weighting
+open_clip_torch==3.3.0
+
+# Progress / logging / visualization
 tqdm==4.67.1
-matplotlib==3.10.0
-scikit-learn==1.6.0
-tensorboard==2.16.2
-protobuf==3.20.3
-joblib==1.5.3
-scipy==1.16.3
-threadpoolctl==3.6.0
-pyparsing==3.3.1
-contourpy==1.3.3 
-cycler==0.12.1 
-fonttools==4.61.1
-kiwisolver==1.4.9
+matplotlib==3.10.6
+tensorboard==2.20.0
+
+# Optional — only needed if you use the Weights & Biases tracker (WandbTracker)
+# wandb==0.24.2
