@@ -3,8 +3,8 @@ outputs/checkpoints/
 outputs/logs/
 outputs/tensorboard/
 
-# Dataset
-data/
+# Dataset (top-level only — must NOT match src/data/ code)
+/data/
 
 # Python
 __pycache__/
