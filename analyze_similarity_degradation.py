@@ -88,10 +88,9 @@ def main() -> None:
     print(f"  Pretrained : {cfg['pretrain']['checkpoint_path']}")
     print(f"  Unlearned  : {args.unlearned}")
 
-    # ── Per-class accuracy averaged over domains, for one model ──────────────────
-    def per_class_acc(model) -> dict[str, list[float]]:
-        # collect per (class, domain) accuracy, then average over domains per class
-        acc_by_class: dict[str, list[float]] = {c: [] for c in classes}
+    # ── Per-(class, domain) accuracy for one model ───────────────────────────────
+    def per_cd_acc(model) -> dict[tuple[str, str], float]:
+        acc: dict[tuple[str, str], float] = {}
         for domain in domains:
             dset_d = DomainNetSubset(root=dn_root, classes=classes, domains=[domain])
             loader = DataLoader(dset_d, batch_size=args.batch_size, shuffle=False, num_workers=0)
@@ -101,13 +100,22 @@ def main() -> None:
                 mask = yt == idx
                 if mask.sum() == 0:
                     continue
-                acc_by_class[cls].append(float(np.mean(yp[mask] == idx)))
-        return acc_by_class
+                acc[(cls, domain)] = float(np.mean(yp[mask] == idx))
+        return acc
 
     print(f"\nEvaluating pretrained over {len(domains)} domains...")
-    pre = per_class_acc(E0)
+    pre_cd = per_cd_acc(E0)
     print(f"Evaluating unlearned over {len(domains)} domains...")
-    unl = per_class_acc(E)
+    unl_cd = per_cd_acc(E)
+
+    # per-class accuracy = mean over the domains where the class has samples
+    def by_class(cd: dict[tuple[str, str], float]) -> dict[str, list[float]]:
+        d: dict[str, list[float]] = {c: [] for c in classes}
+        for (cls, _dom), a in cd.items():
+            d[cls].append(a)
+        return d
+    pre = by_class(pre_cd)
+    unl = by_class(unl_cd)
 
     # ── Similarity (computed pre-unlearning, results-independent x-axis) ─────────
     sim_path = ROOT / args.similarity_json
@@ -162,6 +170,39 @@ def main() -> None:
     print(f"  Spearman rho (similarity vs degradation): {rho:+.3f}")
     print(f"  Pearson  r   (similarity vs degradation): {pear:+.3f}")
     print("  (positive rho => forgetting propagates by similarity, as claimed)")
+
+    # ── STANDARD UNLEARNING METRICS: Forget Acc / Memorize (Retain) Acc, BF->AF ──
+    # Forget set  = forget class in the forget domain (e.g. tiger / sketch)
+    # Retain set  = all other classes, across all domains
+    # MIA         = (BF_forget - AF_forget) - (BF_retain - AF_retain)   (higher = better)
+    def _mean(vals):
+        vals = [v for v in vals if v is not None]
+        return float(np.mean(vals)) if vals else float("nan")
+
+    bf_f = pre_cd.get((forget_name, forget_dom))
+    af_f = unl_cd.get((forget_name, forget_dom))
+    retain_keys = [(c, d) for (c, d) in pre_cd if c != forget_name]
+    bf_r = _mean([pre_cd[k] for k in retain_keys])
+    af_r = _mean([unl_cd[k] for k in retain_keys])
+    mia = (bf_f - af_f) - (bf_r - af_r) if (bf_f is not None and af_f is not None) else float("nan")
+
+    print("\n" + "=" * W)
+    print(f"  UNLEARNING METRICS — forget: {forget_name} ({forget_dom})")
+    print("=" * W)
+    print(f"  {'Set':28}{'BF':>10}{'AF':>10}")
+    print("  " + "-" * (W - 2))
+    print(f"  {'Forget (' + forget_name + '/' + forget_dom + ')':28}{bf_f:>10.1%}{af_f:>10.1%}")
+    print(f"  {'Memorize/Retain (' + str(len(classes) - 1) + ' cls)':28}{bf_r:>10.1%}{af_r:>10.1%}")
+    print("  " + "-" * (W - 2))
+    print(f"  MIA = (BF_f-AF_f) - (BF_r-AF_r) = {mia:+.1%}")
+    # cross-domain view: forget class in EVERY domain (BF -> AF)
+    print(f"\n  {forget_name} accuracy per domain (cross-domain forgetting):")
+    for d in domains:
+        b, a = pre_cd.get((forget_name, d)), unl_cd.get((forget_name, d))
+        if b is not None and a is not None:
+            tag = "  <- targeted" if d == forget_dom else ""
+            print(f"    {d:12}{b:>8.1%} -> {a:>8.1%}{tag}")
+    print("=" * W)
 
     # ── CSV ─────────────────────────────────────────────────────────────────────
     csv_path = ROOT / args.csv_out
