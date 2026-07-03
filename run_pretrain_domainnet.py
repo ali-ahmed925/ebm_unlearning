@@ -29,8 +29,9 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent))
 
 from ebm_unlearning.src.data.domainnet import DomainNetSubset
+from ebm_unlearning.src.data.split import ForgetSpec, RetainSpec, split_forget_retain
 from ebm_unlearning.src.models.ebm import EnergyModel
-from ebm_unlearning.src.training.pretrain import EarlyStoppingConfig, PretrainConfig, pretrain_ebm
+from ebm_unlearning.src.training.pretrain import EarlyStoppingConfig, PretrainConfig, load_pretrained, pretrain_ebm
 from ebm_unlearning.src.utils.logging import setup_logger
 from ebm_unlearning.src.utils.seed import set_seed
 
@@ -40,6 +41,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--config", required=True, help="Path to a DomainNet config yaml (relative to project root or absolute).")
     p.add_argument("--tracker", choices=["null", "tensorboard"], default="null",
                    help="null (default, portable) or tensorboard.")
+    p.add_argument("--exclude-forget", action="store_true",
+                   help="Drop the forget (class,domain) cell (e.g. tiger/sketch) from the training "
+                        "set before the train/val split — retrain-on-retain-only. Keeps the class in "
+                        "other domains. Uses cfg['data']['forget'] {class_label, domain}.")
+    p.add_argument("--init-from", type=str, default=None,
+                   help="Optional checkpoint to initialize the model from before pretraining "
+                        "(finetune from an existing model instead of ImageNet init).")
     return p.parse_args()
 
 
@@ -73,11 +81,25 @@ def main() -> None:
     batch_size = int(cfg["data"]["batch_size"])
     num_workers = int(cfg["data"]["num_workers"])
 
+    # --exclude-forget: retrain-on-retain-only — drop the (forget_class, forget_domain)
+    # cell (e.g. tiger/sketch) before the split. Keeps tiger in the other domains.
+    split_source = dset
+    if args.exclude_forget:
+        forget_spec = ForgetSpec(
+            mode="class_domain",
+            class_label=int(cfg["data"]["forget"]["class_label"]),
+            domain=str(cfg["data"]["forget"]["domain"]),
+        )
+        _, retain_source = split_forget_retain(dset, forget_spec, RetainSpec())
+        split_source = retain_source
+        print(f"--exclude-forget: dropped {cfg['data']['forget'].get('class_name')}/"
+              f"{cfg['data']['forget']['domain']} — kept {len(split_source)}/{len(dset)} samples")
+
     val_fraction = float(cfg.get("pretrain", {}).get("val_fraction", 0.1))
-    val_n = int(round(len(dset) * val_fraction))
-    train_n = len(dset) - val_n
+    val_n = int(round(len(split_source) * val_fraction))
+    train_n = len(split_source) - val_n
     train_dset, val_dset = torch.utils.data.random_split(
-        dset, [train_n, val_n],
+        split_source, [train_n, val_n],
         generator=torch.Generator().manual_seed(int(cfg["seed"])),
     )
 
@@ -104,6 +126,14 @@ def main() -> None:
         finetune_stages=int(cfg["model"].get("finetune_stages", 2)),
         imagenet_pretrained=bool(cfg["model"].get("imagenet_pretrained", True)),
     )
+
+    # --init-from: start finetuning from an existing checkpoint instead of ImageNet init.
+    if args.init_from:
+        init_path = Path(args.init_from)
+        if not init_path.is_absolute():
+            init_path = ROOT / init_path
+        model = load_pretrained(model, str(init_path), device=device)
+        print(f"--init-from: initialized model from {init_path}")
 
     pre_cfg = PretrainConfig(
         epochs=int(cfg["pretrain"]["epochs"]),

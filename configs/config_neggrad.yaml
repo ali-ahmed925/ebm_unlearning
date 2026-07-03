@@ -1,0 +1,85 @@
+seed: 42
+device: cuda
+data:
+  dataset: domainnet
+  data_dir: ./data/domainnet/DomainNet
+  domains:
+  - real
+  - sketch
+  - clipart
+  - painting
+  classes:
+  - The_Eiffel_Tower
+  - aircraft_carrier
+  - bed
+  - car
+  - cat
+  - ceiling_fan
+  - dog
+  - donut
+  - dragon
+  - dresser
+  - fireplace
+  - floor_lamp
+  - hourglass
+  - house
+  - knee
+  - lightning
+  - lion
+  - pliers
+  - raccoon
+  - rifle
+  - scissors
+  - snail
+  - streetlight
+  - tiger
+  - tractor
+  - umbrella
+  batch_size: 32
+  num_workers: 6
+  forget:
+    mode: class_domain
+    class_label: 23
+    class_name: tiger
+    domain: sketch
+  retain:
+    mode: complement
+model:
+  name: energy_model
+  backbone: resnet18
+  imagenet_pretrained: true
+  finetune_stages: 1
+  in_channels: 3
+  hidden_dim: 64
+  num_classes: 26
+  embed_dim: 128
+pretrain:
+  epochs: 50
+  lr: 0.0001
+  weight_decay: 0.0
+  margin: 1.0
+  k_neg: 10
+  neg_chunk: 5
+  val_fraction: 0.1
+  early_stopping:
+    enabled: true
+    patience: 8
+    min_delta: 0.001
+    mode: max
+  log_every: 100
+  checkpoint_path: outputs/checkpoints/ebm_pretrained_domainnet_subset.pt
+unlearning:
+  steps: 300
+  lr: 0.0001
+  weight_decay: 0.0
+  lambda_f: 1.0
+  lambda_r: 0.0
+  lambda_m: 0.0
+  lambda_e: 0.001
+  lambda_clip: 0.0
+  n_pca_components: 5
+  margin: 5.0
+  log_every: 50
+  checkpoint_path: outputs/checkpoints/ebm_neggrad_subset.pt
+evaluation:
+  holdout_fraction: 0.2
