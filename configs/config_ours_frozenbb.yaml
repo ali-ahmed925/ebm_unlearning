@@ -1,0 +1,79 @@
+seed: 42
+device: cuda
+
+# ── Frozen-backbone variant (Option A: address "is unlearning just retraining?") ──
+# IDENTICAL to config_domainnet_subset_hivram.yaml EXCEPT model.finetune_stages: 1 -> 0.
+# With finetune_stages=0 the ENTIRE ResNet backbone is frozen during unlearning;
+# only proj + label_emb + energy head update. This makes the "we do not retrain
+# features, we only reshape the energy head" claim airtight.
+#
+# IMPORTANT:
+#   * Do NOT re-pretrain. This config REUSES the existing pretrained checkpoint
+#     (ebm_pretrained_domainnet_subset.pt, whose layer4 is DomainNet-adapted).
+#     finetune_stages=0 only affects what is trainable DURING UNLEARNING.
+#   * Unlearn checkpoint has a NEW name (ebm_unlearned_subset_frozenbb.pt) so the
+#     existing prop checkpoint (..._hivram.pt) is NOT overwritten.
+#   * All unlearning hyperparameters are identical to the prop run, so any change
+#     in results is attributable ONLY to freezing the backbone (controlled test).
+# Run:  python run_unlearn_domainnet.py --config configs/config_ours_frozenbb.yaml --mask-mode cross-class
+# Eval: python analyze_similarity_degradation.py --config configs/config_domainnet_subset_hivram.yaml \
+#           --unlearned outputs/checkpoints/ebm_unlearned_subset_frozenbb.pt
+# ──────────────────────────────────────────────────────────────────────────────
+
+data:
+  dataset: domainnet
+  data_dir: ./data/domainnet/DomainNet
+  domains: [real, sketch, clipart, painting]
+  classes: [The_Eiffel_Tower, aircraft_carrier, bed, car, cat, ceiling_fan, dog, donut, dragon, dresser, fireplace, floor_lamp, hourglass, house, knee, lightning, lion, pliers, raccoon, rifle, scissors, snail, streetlight, tiger, tractor, umbrella]
+  batch_size: 32
+  num_workers: 6
+  forget:
+    mode: class_domain
+    class_label: 23        # tiger index in sorted(classes)
+    class_name: tiger
+    domain: sketch
+  retain:
+    mode: complement
+
+model:
+  name: energy_model
+  backbone: resnet18
+  imagenet_pretrained: true
+  finetune_stages: 0       # <<< the only change vs hivram: freeze the WHOLE backbone during unlearning
+  in_channels: 3
+  hidden_dim: 64
+  num_classes: 26
+  embed_dim: 128
+
+pretrain:
+  epochs: 50
+  lr: 1.0e-4
+  weight_decay: 0.0
+  margin: 1.0
+  k_neg: 10
+  neg_chunk: 5
+  val_fraction: 0.1
+  early_stopping:
+    enabled: true
+    patience: 8
+    min_delta: 0.001
+    mode: max
+  log_every: 100
+  checkpoint_path: outputs/checkpoints/ebm_pretrained_domainnet_subset.pt   # REUSED, read-only (do NOT re-pretrain)
+
+unlearning:
+  steps: 1500
+  lr: 1.0e-4
+  weight_decay: 0.0
+  lambda_f: 1.0
+  lambda_r: 15.0
+  lambda_m: 1.0
+  lambda_e: 1.0e-3
+  lambda_clip: 3.0
+  n_pca_components: 5
+  margin: 5.0
+  log_every: 50
+  checkpoint_path: outputs/checkpoints/ebm_unlearned_subset_frozenbb.pt   # NEW name — existing checkpoints untouched
+
+evaluation:
+  holdout_fraction: 0.2
