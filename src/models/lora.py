@@ -42,6 +42,13 @@ LAYER4_CONV_TARGETS = [
     "_backbone.layer4.1.conv1",
     "_backbone.layer4.1.conv2",
 ]
+LAYER3_CONV_TARGETS = [
+    "_backbone.layer3.0.conv1",
+    "_backbone.layer3.0.conv2",
+    "_backbone.layer3.0.downsample.0",
+    "_backbone.layer3.1.conv1",
+    "_backbone.layer3.1.conv2",
+]
 PROJ_TARGET = ["proj"]
 
 

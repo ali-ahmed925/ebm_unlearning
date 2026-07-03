@@ -44,7 +44,8 @@ from ebm_unlearning.src.losses.clip_subspace import (
 )
 from ebm_unlearning.src.models.ebm import EnergyModel
 from ebm_unlearning.src.models.lora import (
-    inject_lora, merge_lora, lora_trainable_params, LAYER4_CONV_TARGETS, PROJ_TARGET,
+    inject_lora, merge_lora, lora_trainable_params,
+    LAYER4_CONV_TARGETS, LAYER3_CONV_TARGETS, PROJ_TARGET,
 )
 from ebm_unlearning.src.training.pretrain import load_pretrained
 from ebm_unlearning.src.training.unlearn import UnlearnConfig, unlearn
@@ -57,9 +58,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--config", required=True, help="Path to a DomainNet config yaml (relative to project root or absolute).")
     p.add_argument("--mask-mode", choices=["cross-class", "cross-domain"], default="cross-class")
     p.add_argument("--tracker", choices=["null", "tensorboard"], default="null")
-    p.add_argument("--lora-targets", choices=["layer4", "proj", "both"], default="layer4",
-                   help="Which modules get LoRA adapters. layer4 = backbone conv stage (recommended; "
-                        "propagation is backbone-mediated). proj = the 512->128 head only. both = both.")
+    p.add_argument("--lora-targets", choices=["layer4", "layer34", "proj", "both"], default="layer4",
+                   help="Which modules get LoRA adapters. layer4 = last backbone stage. "
+                        "layer34 = layer3+layer4 (more capacity -> stronger propagation). "
+                        "proj = the 512->128 head only. both = proj+layer4.")
     p.add_argument("--lora-rank", type=int, default=8)
     p.add_argument("--lora-alpha", type=float, default=16.0)
     return p.parse_args()
@@ -192,6 +194,7 @@ def main() -> None:
     # LoRA: freeze backbone, add rank-r adapters on the chosen targets.
     # Head (proj/label_emb/energy) stays fully trainable UNLESS it is itself a target.
     targets = {"layer4": LAYER4_CONV_TARGETS,
+               "layer34": LAYER3_CONV_TARGETS + LAYER4_CONV_TARGETS,
                "proj": PROJ_TARGET,
                "both": PROJ_TARGET + LAYER4_CONV_TARGETS}[args.lora_targets]
     inject_lora(E, targets, rank=args.lora_rank, alpha=args.lora_alpha)
