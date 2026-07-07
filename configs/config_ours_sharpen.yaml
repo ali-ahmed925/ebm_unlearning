@@ -1,0 +1,73 @@
+seed: 42
+device: cuda
+
+# ── Sharpened-weighting propagate variant ─────────────────────────────────────
+# IDENTICAL to config_domainnet_subset_hivram.yaml (the propagate run) EXCEPT:
+#   * weight_threshold zeroes the DINOv2 propagation weight for low-similarity
+#     (unrelated) samples, so only similar classes receive the forget signal.
+#     Goal: keep the strong drop on SIMILAR classes while sparing UNRELATED ones
+#     (higher unrel. retain -> crisper selectivity).
+#   * new checkpoint name so nothing existing is overwritten.
+# Tune weight_threshold via the "nonzero weights before->after" print; try 0.1/0.2/0.3.
+# Run:  python run_unlearn_domainnet.py --config configs/config_ours_sharpen.yaml --mask-mode cross-class
+# ──────────────────────────────────────────────────────────────────────────────
+
+data:
+  dataset: domainnet
+  data_dir: ./data/domainnet/DomainNet
+  domains: [real, sketch, clipart, painting]
+  classes: [The_Eiffel_Tower, aircraft_carrier, bed, car, cat, ceiling_fan, dog, donut, dragon, dresser, fireplace, floor_lamp, hourglass, house, knee, lightning, lion, pliers, raccoon, rifle, scissors, snail, streetlight, tiger, tractor, umbrella]
+  batch_size: 32
+  num_workers: 6
+  forget:
+    mode: class_domain
+    class_label: 23        # tiger index in sorted(classes)
+    class_name: tiger
+    domain: sketch
+  retain:
+    mode: complement
+
+model:
+  name: energy_model
+  backbone: resnet18
+  imagenet_pretrained: true
+  finetune_stages: 1
+  in_channels: 3
+  hidden_dim: 64
+  num_classes: 26
+  embed_dim: 128
+
+pretrain:
+  epochs: 50
+  lr: 1.0e-4
+  weight_decay: 0.0
+  margin: 1.0
+  k_neg: 10
+  neg_chunk: 5
+  val_fraction: 0.1
+  early_stopping:
+    enabled: true
+    patience: 8
+    min_delta: 0.001
+    mode: max
+  log_every: 100
+  checkpoint_path: outputs/checkpoints/ebm_pretrained_domainnet_subset.pt   # REUSED, read-only
+
+unlearning:
+  steps: 1500
+  lr: 1.0e-4
+  weight_decay: 0.0
+  lambda_f: 1.0
+  lambda_r: 15.0
+  lambda_m: 1.0
+  lambda_e: 1.0e-3
+  lambda_clip: 3.0
+  n_pca_components: 5
+  margin: 5.0
+  log_every: 50
+  weight_threshold: 0.2    # <<< NEW: zero DINOv2 weight below this (spare unrelated). 0.0 = off.
+  weight_power: 1.0        # <<< NEW: raise surviving weights to this power (1.0 = off).
+  checkpoint_path: outputs/checkpoints/ebm_unlearned_subset_sharpen.pt   # NEW name
+
+evaluation:
+  holdout_fraction: 0.2

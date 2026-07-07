@@ -161,6 +161,21 @@ def main() -> None:
         print("  mask-mode=cross-class: all retain samples receive the weighted forget signal (propagation)")
     print(f"  (forget-class retain samples: {int((retain_cls == forget_cls).sum())})")
 
+    # Sharpen the propagation weighting: zero out low-similarity (unrelated) samples,
+    # then optionally raise the survivors to a power. This concentrates the forget
+    # signal on the most similar classes and spares unrelated ones (higher unrel. retain).
+    w_thresh = float(cfg["unlearning"].get("weight_threshold", 0.0))
+    w_power = float(cfg["unlearning"].get("weight_power", 1.0))
+    n_before = int((retain_weights > 0).sum())
+    if w_thresh > 0.0:
+        retain_weights[retain_weights < w_thresh] = 0.0
+    if w_power != 1.0:
+        retain_weights = retain_weights ** w_power
+    if w_thresh > 0.0 or w_power != 1.0:
+        n_after = int((retain_weights > 0).sum())
+        print(f"  sharpen: threshold={w_thresh} power={w_power} -> nonzero weights {n_before} -> {n_after}"
+              f"  (mean={float(retain_weights.mean()):.4f} max={float(retain_weights.max()):.4f})")
+
     # free DINO before training (not needed further)
     del enc_model, enc_preprocess
     import gc
