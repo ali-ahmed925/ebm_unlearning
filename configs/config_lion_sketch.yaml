@@ -1,0 +1,70 @@
+seed: 42
+device: cuda
+
+# ── High-VRAM variant of config_domainnet_subset.yaml ─────────────────────────
+# ONLY two things change vs the subset config, both to fix the undertrained
+# cross-domain forgetting observed in the bs=8 run:
+#   batch_size 8 -> 32   (kills gradient noise; 4x more tiger-retain samples/batch)
+#   steps 500 -> 1500    (more exposures to the rare high-DINO-weight tiger-in-
+#                         other-domain samples that drive cross-domain forgetting)
+# Pretrain checkpoint is REUSED (pretraining converged fine); only unlearning is
+# re-run. Unlearn checkpoint has a NEW name so nothing existing is overwritten.
+# ──────────────────────────────────────────────────────────────────────────────
+
+data:
+  dataset: domainnet
+  data_dir: ./data/domainnet/DomainNet
+  domains: [real, sketch, clipart, painting]
+  classes: [The_Eiffel_Tower, aircraft_carrier, bed, car, cat, ceiling_fan, dog, donut, dragon, dresser, fireplace, floor_lamp, hourglass, house, knee, lightning, lion, pliers, raccoon, rifle, scissors, snail, streetlight, tiger, tractor, umbrella]
+  batch_size: 32          # was 8 — raise on the high-VRAM machine
+  num_workers: 6
+  forget:
+    mode: class_domain
+    class_label: 16        # lion index in sorted(classes)
+    class_name: lion
+    domain: sketch        # forget ONLY sketch-tiger
+  retain:
+    mode: complement
+
+model:
+  name: energy_model
+  backbone: resnet18
+  imagenet_pretrained: true
+  finetune_stages: 1
+  in_channels: 3
+  hidden_dim: 64
+  num_classes: 26          # subset size
+  embed_dim: 128
+
+pretrain:
+  epochs: 50
+  lr: 1.0e-4
+  weight_decay: 0.0
+  margin: 1.0
+  k_neg: 10
+  neg_chunk: 5
+  val_fraction: 0.1
+  early_stopping:
+    enabled: true
+    patience: 8
+    min_delta: 0.001
+    mode: max
+  log_every: 100
+  checkpoint_path: outputs/checkpoints/ebm_pretrained_domainnet_subset.pt   # REUSED (do not re-pretrain)
+
+unlearning:
+  steps: 1500             # was 500 — more steps to overcome cross-domain signal dilution
+  lr: 1.0e-4
+  weight_decay: 0.0
+  lambda_f: 1.0
+  lambda_r: 15.0
+  lambda_m: 1.0
+  lambda_e: 1.0e-3
+  lambda_clip: 3.0
+  n_pca_components: 5
+  margin: 5.0
+  log_every: 50
+  checkpoint_path: outputs/checkpoints/ebm_unlearned_domainnet_subset_lion_sketch.pt
+
+evaluation:
+  holdout_fraction: 0.2
