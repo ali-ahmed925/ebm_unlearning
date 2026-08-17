@@ -66,6 +66,123 @@ def _extract_features_from_loader(model, loader, device, encoder_type="dino"):
     return torch.cat(features, dim=0)  # (N, D)
 
 
+def subspace_weights_from_features(
+    forget_feat: torch.Tensor,
+    retain_feat: torch.Tensor,
+    n_components: int = 10,
+):
+    """
+    Per-sample subspace weights from already-extracted encoder features.
+
+    Factored out of compute_domainnet_subspace_weights so that a hyperparameter
+    sweep can extract features ONCE and then vary n_components (and lambda_clip,
+    which does not affect the weights at all) without paying for DINOv2 again.
+    The arithmetic is identical to the original inline version.
+
+    w_i = fraction of retain sample i's globally-centered feature energy that
+    lies inside the top-k PCA subspace of the forget set.
+    """
+    global_mean = torch.cat([forget_feat, retain_feat], dim=0).mean(dim=0)
+
+    forget_centered = forget_feat - global_mean.unsqueeze(0)
+    _, _, Vt = torch.linalg.svd(forget_centered, full_matrices=False)
+    subspace = Vt[:n_components]  # (k, D)
+
+    retain_centered = retain_feat - global_mean.unsqueeze(0)
+    proj_energy  = (retain_centered @ subspace.T).pow(2).sum(dim=1)
+    total_energy = retain_centered.pow(2).sum(dim=1).clamp(min=1e-8)
+    weights      = (proj_energy / total_energy).clamp(min=0, max=1)
+
+    return weights, subspace, global_mean
+
+
+def style_subspace_from_features(
+    feats: torch.Tensor,
+    class_labels: torch.Tensor,
+    domain_labels: torch.Tensor,
+    n_components: int = 10,
+    min_per_cell: int = 5,
+    exclude_class: int | None = None,
+):
+    """
+    Estimate the rendering-STYLE subspace from cross-domain variation.
+
+    For every (class, domain) cell we take the centroid and subtract that class's
+    overall centroid. The residual is "what changes when this same concept is
+    re-rendered in a different style". Pooling those residuals over many classes
+    and taking the top-m principal directions gives a subspace that spans style
+    while being largely free of any single concept's identity.
+
+    `exclude_class` drops the forget class from the estimate, so the style
+    subspace is built with NO supervision about the concept being erased -- which
+    matches deployment, where you do not have labelled harmful examples in every
+    rendering style.
+
+    Returns an orthonormal (m, D) basis.
+    """
+    diffs = []
+    for c in torch.unique(class_labels):
+        if exclude_class is not None and int(c) == int(exclude_class):
+            continue
+        m_c = class_labels == c
+        if int(m_c.sum()) < min_per_cell:
+            continue
+        mu_c = feats[m_c].mean(dim=0)
+        for d in torch.unique(domain_labels):
+            m = m_c & (domain_labels == d)
+            if int(m.sum()) < min_per_cell:
+                continue
+            diffs.append(feats[m].mean(dim=0) - mu_c)
+
+    if len(diffs) < 2:
+        raise ValueError(
+            f"style subspace needs >=2 (class, domain) cells with >={min_per_cell} samples; got {len(diffs)}"
+        )
+    D = torch.stack(diffs, dim=0)                      # (n_cells, D)
+    _, _, Vt = torch.linalg.svd(D, full_matrices=False)
+    return Vt[: min(n_components, Vt.shape[0])]        # orthonormal rows
+
+
+def style_invariant_weights_from_features(
+    forget_feat: torch.Tensor,
+    retain_feat: torch.Tensor,
+    style_subspace: torch.Tensor,
+    n_components: int = 5,
+):
+    """
+    Per-sample weights computed AFTER projecting out the style subspace.
+
+    The stock weighting (subspace_weights_from_features) builds its subspace from
+    the forget cell, which mixes concept identity with rendering style: a retain
+    sample scores high either because it depicts something similar OR merely
+    because it is drawn in the same style. That conflation is exactly what ties
+    style-invariance to collateral damage.
+
+    Here we deflate the style directions first, so a retain sample scores high
+    only if it shares the forget CONCEPT -- which should raise transfer to the
+    same concept in other domains while sparing style-confounded neighbours.
+
+    Returns (weights (N_retain,), concept_subspace (k, D)).
+    """
+    S = style_subspace
+    global_mean = torch.cat([forget_feat, retain_feat], dim=0).mean(dim=0)
+
+    def deflate(x: torch.Tensor) -> torch.Tensor:
+        xc = x - global_mean.unsqueeze(0)
+        return xc - (xc @ S.T) @ S     # S has orthonormal rows
+
+    fz = deflate(forget_feat)
+    rz = deflate(retain_feat)
+
+    _, _, Vt = torch.linalg.svd(fz, full_matrices=False)
+    concept_subspace = Vt[:n_components]
+
+    proj_energy  = (rz @ concept_subspace.T).pow(2).sum(dim=1)
+    total_energy = rz.pow(2).sum(dim=1).clamp(min=1e-8)
+    weights      = (proj_energy / total_energy).clamp(min=0, max=1)
+    return weights, concept_subspace
+
+
 def compute_domainnet_subspace_weights(
     model,
     forget_loader: DataLoader,
@@ -90,16 +207,9 @@ def compute_domainnet_subspace_weights(
     print(f"  {tag}: extracting retain features ({len(retain_loader.dataset)} samples)...")
     retain_feat = _extract_features_from_loader(model, retain_loader, device, encoder_type)
 
-    global_mean = torch.cat([forget_feat, retain_feat], dim=0).mean(dim=0)
-
-    forget_centered = forget_feat - global_mean.unsqueeze(0)
-    _, _, Vt = torch.linalg.svd(forget_centered, full_matrices=False)
-    subspace = Vt[:n_components]  # (k, D)
-
-    retain_centered = retain_feat - global_mean.unsqueeze(0)
-    proj_energy  = (retain_centered @ subspace.T).pow(2).sum(dim=1)
-    total_energy = retain_centered.pow(2).sum(dim=1).clamp(min=1e-8)
-    weights      = (proj_energy / total_energy).clamp(min=0, max=1)
+    weights, subspace, global_mean = subspace_weights_from_features(
+        forget_feat, retain_feat, n_components
+    )
 
     print(f"  weights — mean={weights.mean():.4f}  max={weights.max():.4f}"
           f"  %>0.05: {(weights > 0.05).float().mean():.1%}")

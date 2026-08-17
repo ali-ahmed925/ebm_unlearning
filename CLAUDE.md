@@ -42,9 +42,14 @@ python eval_classification_ebm.py --checkpoint outputs/checkpoints/ebm_unlearned
 python eval_classification_ebm.py --checkpoint outputs/checkpoints/ebm_pretrained_cifar100.pt \
   --dataset cifar100 --num-classes 100 --backbone resnet18 --forget-label 11
 
-# DomainNet (10-class; tiger=0; add --domain sketch to filter by domain, --filter-class-name tiger to filter by class)
+# DomainNet (10-class; add --domain sketch to filter by domain, --filter-class-name tiger to filter by class)
+#
+# IMPORTANT: DomainNetSubset sorts classes alphabetically (src/data/domainnet.py:54),
+# so the forget label is the index in sorted(classes), NOT the position in the
+# EXPERIMENT_CLASSES list. For the 10-class subset tiger = 7 (0 would be airplane).
+# For the 26-class subset (configs/config_domainnet_subset.yaml) tiger = 23.
 python eval_classification_ebm.py --checkpoint outputs/checkpoints/ebm_pretrained_domainnet.pt \
-  --dataset domainnet --num-classes 10 --backbone resnet18 --forget-label 0
+  --dataset domainnet --num-classes 10 --backbone resnet18 --forget-label 7
 ```
 
 **Analysis tools:**
@@ -65,7 +70,15 @@ Checkpoints and logs are written to `outputs/`.
 
 ### Model (`src/models/ebm.py`)
 
-`EnergyModel` supports two backbones (`conv` or `resnet18`). Image features are concatenated with a learned label embedding, then passed through an energy head to produce a scalar. ResNet variant supports partial freezing of early stages.
+`EnergyModel` supports two backbones (`conv` or `resnet18`). Image features are combined with a learned label embedding by **element-wise product** (not concatenation), then passed through a `Linear(embed_dim, 1)` energy head:
+
+```
+E(x, y) = W · (f(x) ⊙ e_y) + b
+```
+
+i.e. a bilinear form with a diagonal interaction matrix. ResNet variant supports partial freezing of early stages.
+
+A useful consequence: energies for *all* labels factor as `f(x) @ (W ⊙ e)ᵀ + b`, so a full label sweep costs one backbone pass per image rather than one per (image, label) pair. `src/evaluation/locality.py:all_class_energies` uses this; the older `classification.predict_argmin_energy` does the naive replication and is `num_classes` times slower.
 
 ### Training (`src/training/`)
 

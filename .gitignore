@@ -44,3 +44,6 @@ wandb/
 # Misc
 *.log
 *.tmp
+
+# Cached encoder features (regenerate locally; large)
+outputs/cache/

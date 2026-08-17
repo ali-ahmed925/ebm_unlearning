@@ -11,18 +11,22 @@ from torchvision import transforms
 
 DOMAINS = ["real", "sketch", "clipart", "painting"]
 
-# 10-class DomainNet subset for tiger unlearning experiment
+# 10-class DomainNet subset for tiger unlearning experiment.
+#
+# NOTE: the order below is semantic grouping only — it is NOT the label order.
+# DomainNetSubset.__init__ does `self.classes = sorted(classes)`, so labels are
+# assigned alphabetically. Index comments give the resulting sorted label.
 EXPERIMENT_CLASSES = [
-    "tiger",    # 0 — explicit forget target
-    "lion",     # 1 — primary cross-class (big cat)
-    "bear",     # 2 — secondary cross-class (large predator)
-    "zebra",    # 3 — mammal, lower similarity
-    "dog",      # 4 — animal control
-    "horse",    # 5 — animal control
-    "truck",    # 6 — unrelated (vehicle)
-    "car",      # 7 — unrelated (vehicle)
-    "guitar",   # 8 — unrelated (instrument)
-    "airplane", # 9 — unrelated (transport)
+    "tiger",    # label 7 — explicit forget target
+    "lion",     # label 6 — primary cross-class (big cat)
+    "bear",     # label 1 — secondary cross-class (large predator)
+    "zebra",    # label 9 — mammal, lower similarity
+    "dog",      # label 3 — animal control
+    "horse",    # label 5 — animal control
+    "truck",    # label 8 — unrelated (vehicle)
+    "car",      # label 2 — unrelated (vehicle)
+    "guitar",   # label 4 — unrelated (instrument)
+    "airplane", # label 0 — unrelated (transport)
 ]
 
 
