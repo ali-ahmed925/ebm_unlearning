@@ -91,6 +91,10 @@ def parse_args() -> argparse.Namespace:
                         "interference from damage caused by head reallocation.")
     p.add_argument("--cache-dir", default="outputs/cache", help="Where DINOv2 features are cached.")
     p.add_argument("--dino-batch", type=int, default=32)
+    p.add_argument("--batch-size", type=int, default=None,
+                   help="Override data.batch_size. The configs are pinned to 8 for a 6 GB card; "
+                        "the forget loss expands to batch x (num_classes-1) images at 224px, so on "
+                        "a 24 GB card 32 is comfortable and much faster.")
     p.add_argument("--skip-existing", action="store_true", help="Do not recompute sweep points already on disk.")
     return p.parse_args()
 
@@ -163,6 +167,10 @@ def main() -> None:
     if args.finetune_stages is not None:
         cfg["model"]["finetune_stages"] = int(args.finetune_stages)
         print(f"[sweep] finetune_stages overridden -> {args.finetune_stages}")
+    if args.batch_size is not None:
+        cfg["data"]["batch_size"] = int(args.batch_size)
+        batch_size = int(args.batch_size)   # the local was already read from cfg above
+        print(f"[sweep] batch_size overridden -> {args.batch_size}")
 
     out_dir = ROOT / "outputs" / "checkpoints" / args.tag
     out_dir.mkdir(parents=True, exist_ok=True)
